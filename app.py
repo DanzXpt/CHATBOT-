@@ -472,6 +472,7 @@ else:
                 if internet_mode:
                     with st.spinner("Mencari informasi di internet..."):
                         web_context = search_web(final_input)
+                        st.write(web_context)
 
                 # =========================
                 # PROMPT
