@@ -4,6 +4,7 @@ from PIL import Image
 import urllib.parse
 import requests
 import io
+from pypdf import PdfReader
 from io import BytesIO
 from dotenv import load_dotenv
 import os
@@ -235,6 +236,28 @@ uploaded_file = st.file_uploader(
     "Upload gambar jika ingin ditanyakan ke AI", type=["jpg", "jpeg", "png"]
 )
 
+uploaded_pdf = st.file_uploader(
+    "Upload PDF",
+    type=["pdf"]
+)
+
+pdf_text = ""
+
+if uploaded_pdf is not None:
+    try:
+        pdf_reader = PdfReader(uploaded_pdf)
+
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+
+            if text:
+                pdf_text += text + "\n"
+
+        st.success("PDF berhasil dibaca.")
+
+    except Exception as e:
+        st.error(f"Gagal membaca PDF: {e}")
+
 if "uploaded_image" not in st.session_state:
     st.session_state.uploaded_image = None
 
@@ -380,6 +403,9 @@ MODE AKTIF:
 
 Riwayat percakapan:
 {conversation}
+
+ISI PDF:
+{pdf_text}
 
 Pertanyaan user:
 {user_input}
