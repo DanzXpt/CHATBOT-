@@ -8,6 +8,11 @@ from pypdf import PdfReader
 from docx import Document
 from streamlit_mic_recorder import mic_recorder
 from duckduckgo_search import DDGS
+import base64
+import json
+import edge_tts
+import asyncio
+import re
 from io import BytesIO
 from dotenv import load_dotenv
 import os
@@ -39,7 +44,6 @@ if not api_key:
 # =========================
 # SETUP GEMINI
 # =========================
-
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel("models/gemini-3.1-flash-lite")
 
@@ -47,13 +51,20 @@ model = genai.GenerativeModel("models/gemini-3.1-flash-lite")
 # =========================
 # FUNCTIONS
 # =========================
+def search_web(query, max_results=3):
+    if query is None:
+        return ""
 
-def search_web(query, max_results=5):
+    query = str(query)
+
+    if not query.strip():
+        return ""
+
     results_text = ""
 
     try:
         with DDGS() as ddgs:
-            results = ddgs.text(query, max_results=max_results)
+            results = list(ddgs.text(keywords=query, max_results=max_results))
 
             for i, result in enumerate(results, start=1):
                 title = result.get("title", "")
@@ -68,11 +79,11 @@ def search_web(query, max_results=5):
 Link: {link}
 
 """
-
     except Exception as e:
         results_text = f"Search error: {e}"
 
     return results_text
+
 
 def get_system_prompt(mode):
     if mode == "Coding":
@@ -131,6 +142,51 @@ def get_temperature(mode, user_temperature):
         return user_temperature
 
 
+def clean_username(username):
+    username = username.lower().strip()
+    username = re.sub(r"[^a-z0-9_]", "_", username)
+    return username
+
+
+def load_memory(username):
+    memory_file = f"memory_{username}.json"
+
+    if os.path.exists(memory_file):
+        with open(memory_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    return {}
+
+
+def save_memory(username, memory_data):
+    memory_file = f"memory_{username}.json"
+
+    with open(memory_file, "w", encoding="utf-8") as f:
+        json.dump(memory_data, f, ensure_ascii=False, indent=2)
+
+
+def load_chat_history(username):
+    history_file = f"chat_{username}.json"
+
+    if os.path.exists(history_file):
+        with open(history_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    return []
+
+
+def save_chat_history(username, messages):
+    history_file = f"chat_{username}.json"
+
+    safe_messages = [
+        msg for msg in messages
+        if msg.get("type") == "text"
+    ]
+
+    with open(history_file, "w", encoding="utf-8") as f:
+        json.dump(safe_messages, f, ensure_ascii=False, indent=2)
+
+
 def build_conversation(max_history):
     conversation = ""
 
@@ -185,6 +241,12 @@ if "messages" not in st.session_state:
 if "uploaded_image" not in st.session_state:
     st.session_state.uploaded_image = None
 
+if "internet_mode" not in st.session_state:
+    st.session_state.internet_mode = False
+
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+
 # =========================
 # SIDEBAR
 # =========================
@@ -193,28 +255,37 @@ with st.sidebar:
 
     mode = st.selectbox(
         "Mode AI",
-        ["General", "Coding", "Matematika", "Translator", "Ringkas", "Tutor"]
+        ["General", "Coding", "Matematika", "Translator", "Ringkas", "Tutor"],
     )
 
     st.success(f"Mode aktif: {mode}")
-    internet_mode = st.toggle("🌐 Internet Search", value=False)
+
+    internet_mode = st.checkbox(
+        "🌐 Internet Search",
+        value=st.session_state.internet_mode,
+    )
+
+    st.session_state.internet_mode = internet_mode
+
+    voice_output = st.checkbox("🔊 Voice Output")
 
     temperature = st.slider(
         "Kreativitas Jawaban",
         min_value=0.1,
         max_value=1.0,
         value=0.7,
-        step=0.1
+        step=0.1,
     )
 
     max_history = st.slider(
         "Batas Riwayat Chat",
         min_value=5,
         max_value=30,
-        value=10
+        value=10,
     )
 
     final_temperature = get_temperature(mode, temperature)
+
     st.caption(f"Temperature aktif: {final_temperature}")
 
     st.divider()
@@ -226,11 +297,31 @@ with st.sidebar:
 generation_config = genai.types.GenerationConfig(temperature=final_temperature)
 
 # =========================
-# TITLE
+# TITLE + LOGIN
 # =========================
 st.title("🤖 AI Chatbot")
 st.write("Chatbot AI pakai Python + Gemini + Streamlit. by Ahdan Hype")
-st.caption("Bisa chat, analisis gambar, generate gambar, dan upload banyak file.")
+st.caption("Bisa chat, analisis gambar, generate gambar, upload banyak file, voice, dan memory.")
+
+st.subheader("👤 Login User")
+
+username_input = st.text_input("Masukkan username", placeholder="contoh: danz")
+
+if not username_input:
+    st.warning("Masukkan username dulu untuk mulai chat.")
+    st.stop()
+
+username = clean_username(username_input)
+st.success(f"Login sebagai: {username}")
+
+# =========================
+# LOAD MEMORY + HISTORY PER USER
+# =========================
+memory_data = load_memory(username)
+
+if st.session_state.current_user != username:
+    st.session_state.current_user = username
+    st.session_state.messages = load_chat_history(username)
 
 # =========================
 # UPLOAD GAMBAR
@@ -238,7 +329,7 @@ st.caption("Bisa chat, analisis gambar, generate gambar, dan upload banyak file.
 uploaded_image_file = st.file_uploader(
     "Upload gambar jika ingin ditanyakan ke AI",
     type=["jpg", "jpeg", "png"],
-    key="image_uploader"
+    key="image_uploader",
 )
 
 if uploaded_image_file is not None:
@@ -266,7 +357,7 @@ uploaded_files = st.file_uploader(
     "Upload File (PDF, TXT, DOCX)",
     type=["pdf", "txt", "docx"],
     accept_multiple_files=True,
-    key="file_uploader"
+    key="file_uploader",
 )
 
 all_file_text = ""
@@ -284,13 +375,13 @@ if uploaded_files:
                 for page in pdf_reader.pages:
                     text = page.extract_text()
                     if text:
-                        all_file_text += text + "\n"
+                        all_file_text += text[:3000] + "\n"
 
             elif file_name.endswith(".txt"):
                 text = uploaded_doc.read().decode("utf-8")
 
                 all_file_text += f"\n\n--- Isi dari {uploaded_doc.name} ---\n"
-                all_file_text += text + "\n"
+                all_file_text += text[:3000] + "\n"
 
             elif file_name.endswith(".docx"):
                 doc = Document(uploaded_doc)
@@ -299,7 +390,7 @@ if uploaded_files:
 
                 for para in doc.paragraphs:
                     if para.text.strip():
-                        all_file_text += para.text + "\n"
+                        all_file_text += para.text[:3000] + "\n"
 
             st.success(f"{uploaded_doc.name} berhasil dibaca.")
 
@@ -320,6 +411,12 @@ with col1:
     if st.button("Hapus Chat"):
         st.session_state.messages = []
         st.session_state.uploaded_image = None
+
+        history_file = f"chat_{username}.json"
+
+        if os.path.exists(history_file):
+            os.remove(history_file)
+
         st.rerun()
 
 with col2:
@@ -328,7 +425,7 @@ with col2:
     st.download_button(
         label="Download Chat",
         data=chat_text if chat_text else "Belum ada chat.",
-        file_name="riwayat_chat.txt",
+        file_name=f"riwayat_chat_{username}.txt",
         mime="text/plain",
     )
 
@@ -346,7 +443,6 @@ for message in st.session_state.messages:
         else:
             st.markdown(message["content"])
 
-
 # =========================
 # VOICE INPUT
 # =========================
@@ -356,7 +452,7 @@ audio = mic_recorder(
     start_prompt="🎙️ Mulai Rekam",
     stop_prompt="⏹️ Stop Rekam",
     just_once=True,
-    key="recorder"
+    key="recorder",
 )
 
 voice_text = ""
@@ -364,21 +460,19 @@ voice_text = ""
 if audio:
     try:
         with st.spinner("Mengubah suara jadi teks..."):
-
             audio_bytes = audio["bytes"]
 
-            audio_file = {
-                "mime_type": "audio/wav",
-                "data": audio_bytes
-            }
+            audio_file = {"mime_type": "audio/wav", "data": audio_bytes}
 
-            response = model.generate_content([
-                """
+            response = model.generate_content(
+                [
+                    """
 Transkrip audio ini ke teks bahasa Indonesia.
 Hanya tuliskan hasil transkrip tanpa penjelasan tambahan.
 """,
-                audio_file
-            ])
+                    audio_file,
+                ]
+            )
 
             voice_text = response.text
 
@@ -391,17 +485,23 @@ Hanya tuliskan hasil transkrip tanpa penjelasan tambahan.
 # =========================
 # INPUT USER
 # =========================
-user_input = st.chat_input("Tulis pesan...")
+user_input = st.chat_input("Tulis pesan...", key="main_chat_input")
 
-final_input = user_input
+final_input = ""
+
+if user_input:
+    final_input = user_input
 
 if voice_text:
     final_input = voice_text
 
 if final_input:
+    bot_reply = None
+
     st.session_state.messages.append(
         {"role": "user", "content": final_input, "type": "text"}
     )
+    save_chat_history(username, st.session_state.messages)
 
     with st.chat_message("user"):
         st.markdown(final_input)
@@ -414,74 +514,59 @@ if final_input:
 
         with st.chat_message("assistant"):
             if not prompt_gambar:
-                bot_reply = (
-                    "Tulis deskripsi gambar setelah `/gambar`.\n\n"
-                    "Contoh: `/gambar kucing cyberpunk di kota futuristik`"
-                )
-
+                bot_reply = "Tulis prompt gambar. Contoh: `/gambar motor merah futuristik`"
                 st.markdown(bot_reply)
 
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": bot_reply, "type": "text"}
-                )
-
             else:
-                with st.spinner("Sedang membuat gambar..."):
-                    try:
-                        image_bytes = generate_image(prompt_gambar)
+                try:
+                    image_bytes = generate_image(prompt_gambar)
 
-                        st.image(
-                            BytesIO(image_bytes),
-                            caption=prompt_gambar,
-                            use_container_width=True,
-                        )
+                    st.image(
+                        BytesIO(image_bytes),
+                        caption=prompt_gambar,
+                        use_container_width=True,
+                    )
 
-                        st.session_state.messages.append(
-                            {
-                                "role": "assistant",
-                                "content": image_bytes,
-                                "caption": prompt_gambar,
-                                "type": "image_bytes",
-                            }
-                        )
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": image_bytes,
+                            "caption": prompt_gambar,
+                            "type": "image_bytes",
+                        }
+                    )
 
-                    except Exception as e:
-                        bot_reply = f"Terjadi error saat membuat gambar: {e}"
-                        st.markdown(bot_reply)
-
-                        st.session_state.messages.append(
-                            {"role": "assistant", "content": bot_reply, "type": "text"}
-                        )
+                except Exception as e:
+                    bot_reply = f"Terjadi error saat membuat gambar: {e}"
+                    st.markdown(bot_reply)
 
     # =========================
-    # MODE CHAT / ANALISIS GAMBAR / FILE
+    # MODE CHAT AI
     # =========================
-else:
-    conversation = build_conversation(max_history)
-    system_prompt = get_system_prompt(mode)
+    else:
+        conversation = build_conversation(max_history)
+        system_prompt = get_system_prompt(mode)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Bot sedang berpikir..."):
-            try:
+        web_context = ""
 
-                # =========================
-                # INTERNET SEARCH
-                # =========================
-                web_context = ""
+        if st.session_state.internet_mode and final_input:
+            with st.spinner("Mencari informasi di internet..."):
+                web_context = search_web(final_input)
 
-                if internet_mode:
-                    with st.spinner("Mencari informasi di internet..."):
-                        web_context = search_web(final_input)
-                        st.write(web_context)
-
-                # =========================
-                # PROMPT
-                # =========================
-                prompt = f"""
+        with st.chat_message("assistant"):
+            with st.spinner("Bot sedang berpikir..."):
+                try:
+                    prompt = f"""
 {system_prompt}
+
+Gunakan HASIL PENCARIAN INTERNET jika tersedia.
+Jangan bilang kamu tidak punya akses internet jika hasil search sudah diberikan.
 
 MODE AKTIF:
 {mode}
+
+MEMORY USER:
+{memory_data}
 
 Riwayat percakapan:
 {conversation}
@@ -495,70 +580,70 @@ Pertanyaan user:
 {final_input}
 """
 
-                # =========================
-                # IMAGE MODE
-                # =========================
-                if st.session_state.uploaded_image is not None:
+                    if st.session_state.uploaded_image is not None:
+                        response = model.generate_content(
+                            [prompt, st.session_state.uploaded_image],
+                            generation_config=generation_config,
+                        )
+                    else:
+                        response = model.generate_content(
+                            prompt,
+                            generation_config=generation_config,
+                        )
 
-                    response = model.generate_content(
-                        [prompt, st.session_state.uploaded_image],
-                        generation_config=generation_config,
-                    )
-
-                else:
-
-                    response = model.generate_content(
-                        prompt,
-                        generation_config=generation_config,
-                    )
-
-                # =========================
-                # RESPONSE
-                # =========================
-                try:
                     bot_reply = response.text
 
-                except Exception:
-                    bot_reply = (
-                        "AI gagal membaca response. "
-                        "Kemungkinan quota Gemini habis atau model tidak mendukung input ini."
-                    )
-
-            except Exception as e:
-
-                error_text = str(e)
-
-                if "429" in error_text or "quota" in error_text.lower():
-
-                    bot_reply = (
-                        "Quota API habis atau kena limit. "
-                        "Coba tunggu sebentar atau cek billing/quota Gemini."
-                    )
-
-                elif "API_KEY" in error_text or "api key" in error_text.lower():
-
-                    bot_reply = (
-                        "API key bermasalah. "
-                        "Cek file `.env` atau Streamlit Secrets."
-                    )
-
-                elif "not found" in error_text.lower():
-
-                    bot_reply = (
-                        "Model Gemini tidak ditemukan. "
-                        "Pakai model yang tersedia di akun kamu."
-                    )
-
-                else:
-
+                except Exception as e:
                     bot_reply = f"Terjadi error: {e}"
 
-            st.markdown(bot_reply)
+                if "nama saya" in final_input.lower():
+                    try:
+                        name = final_input.lower().replace("nama saya", "").strip()
 
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": bot_reply,
-            "type": "text"
-        }
-    )
+                        if name:
+                            memory_data["nama"] = name
+                            save_memory(username, memory_data)
+
+                    except Exception:
+                        pass
+
+                st.markdown(bot_reply)
+
+    # =========================
+    # VOICE OUTPUT
+    # =========================
+    if voice_output and bot_reply:
+        try:
+            async def generate_voice():
+                communicate = edge_tts.Communicate(
+                    bot_reply,
+                    voice="id-ID-ArdiNeural",
+                )
+                await communicate.save("response.mp3")
+
+            asyncio.run(generate_voice())
+
+            with open("response.mp3", "rb") as audio_file:
+                audio_bytes = audio_file.read()
+
+            audio_base64 = base64.b64encode(audio_bytes).decode()
+
+            audio_html = f"""
+            <audio autoplay>
+                <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
+            </audio>
+            """
+
+            st.markdown(audio_html, unsafe_allow_html=True)
+
+        except Exception as e:
+            st.error(f"Gagal membuat voice output: {e}")
+
+    # =========================
+    # SAVE CHAT HISTORY
+    # =========================
+    if bot_reply:
+        st.session_state.messages.append(
+            {"role": "assistant", "content": bot_reply, "type": "text"}
+        )
+        save_chat_history(username, st.session_state.messages)
