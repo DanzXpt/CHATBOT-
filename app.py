@@ -7,6 +7,7 @@ import io
 from pypdf import PdfReader
 from docx import Document
 from streamlit_mic_recorder import mic_recorder
+from duckduckgo_search import DDGS
 from io import BytesIO
 from dotenv import load_dotenv
 import os
@@ -38,11 +39,41 @@ if not api_key:
 # =========================
 # SETUP GEMINI
 # =========================
+
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel("models/gemini-3.1-flash-lite")
+
+
 # =========================
 # FUNCTIONS
 # =========================
+
+def search_web(query, max_results=5):
+    results_text = ""
+
+    try:
+        with DDGS() as ddgs:
+            results = ddgs.text(query, max_results=max_results)
+
+            for i, result in enumerate(results, start=1):
+                title = result.get("title", "")
+                body = result.get("body", "")
+                link = result.get("href", "")
+
+                results_text += f"""
+[{i}] {title}
+
+{body}
+
+Link: {link}
+
+"""
+
+    except Exception as e:
+        results_text = f"Search error: {e}"
+
+    return results_text
+
 def get_system_prompt(mode):
     if mode == "Coding":
         return """
@@ -166,6 +197,7 @@ with st.sidebar:
     )
 
     st.success(f"Mode aktif: {mode}")
+    internet_mode = st.toggle("🌐 Internet Search", value=False)
 
     temperature = st.slider(
         "Kreativitas Jawaban",
@@ -424,14 +456,27 @@ if final_input:
     # =========================
     # MODE CHAT / ANALISIS GAMBAR / FILE
     # =========================
-    else:
-        conversation = build_conversation(max_history)
-        system_prompt = get_system_prompt(mode)
+else:
+    conversation = build_conversation(max_history)
+    system_prompt = get_system_prompt(mode)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Bot sedang berpikir..."):
-                try:
-                    prompt = f"""
+    with st.chat_message("assistant"):
+        with st.spinner("Bot sedang berpikir..."):
+            try:
+
+                # =========================
+                # INTERNET SEARCH
+                # =========================
+                web_context = ""
+
+                if internet_mode:
+                    with st.spinner("Mencari informasi di internet..."):
+                        web_context = search_web(final_input)
+
+                # =========================
+                # PROMPT
+                # =========================
+                prompt = f"""
 {system_prompt}
 
 MODE AKTIF:
@@ -440,53 +485,79 @@ MODE AKTIF:
 Riwayat percakapan:
 {conversation}
 
+HASIL PENCARIAN INTERNET:
+{web_context}
+
 {file_context}
 
 Pertanyaan user:
 {final_input}
 """
 
-                    if st.session_state.uploaded_image is not None:
-                        response = model.generate_content(
-                            [prompt, st.session_state.uploaded_image],
-                            generation_config=generation_config,
-                        )
-                    else:
-                        response = model.generate_content(
-                            prompt,
-                            generation_config=generation_config,
-                        )
+                # =========================
+                # IMAGE MODE
+                # =========================
+                if st.session_state.uploaded_image is not None:
 
-                    try:
-                        bot_reply = response.text
-                    except Exception:
-                        bot_reply = (
-                            "AI gagal membaca response. "
-                            "Kemungkinan quota Gemini habis atau model tidak mendukung input ini."
-                        )
+                    response = model.generate_content(
+                        [prompt, st.session_state.uploaded_image],
+                        generation_config=generation_config,
+                    )
 
-                except Exception as e:
-                    error_text = str(e)
+                else:
 
-                    if "429" in error_text or "quota" in error_text.lower():
-                        bot_reply = (
-                            "Quota API habis atau kena limit. "
-                            "Coba tunggu sebentar atau cek billing/quota Gemini."
-                        )
-                    elif "API_KEY" in error_text or "api key" in error_text.lower():
-                        bot_reply = (
-                            "API key bermasalah. Cek file `.env` atau Streamlit Secrets."
-                        )
-                    elif "not found" in error_text.lower():
-                        bot_reply = (
-                            "Model Gemini tidak ditemukan. "
-                            "Pakai model yang tersedia di akun kamu."
-                        )
-                    else:
-                        bot_reply = f"Terjadi error: {e}"
+                    response = model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                    )
 
-                st.markdown(bot_reply)
+                # =========================
+                # RESPONSE
+                # =========================
+                try:
+                    bot_reply = response.text
 
-        st.session_state.messages.append(
-            {"role": "assistant", "content": bot_reply, "type": "text"}
-        )
+                except Exception:
+                    bot_reply = (
+                        "AI gagal membaca response. "
+                        "Kemungkinan quota Gemini habis atau model tidak mendukung input ini."
+                    )
+
+            except Exception as e:
+
+                error_text = str(e)
+
+                if "429" in error_text or "quota" in error_text.lower():
+
+                    bot_reply = (
+                        "Quota API habis atau kena limit. "
+                        "Coba tunggu sebentar atau cek billing/quota Gemini."
+                    )
+
+                elif "API_KEY" in error_text or "api key" in error_text.lower():
+
+                    bot_reply = (
+                        "API key bermasalah. "
+                        "Cek file `.env` atau Streamlit Secrets."
+                    )
+
+                elif "not found" in error_text.lower():
+
+                    bot_reply = (
+                        "Model Gemini tidak ditemukan. "
+                        "Pakai model yang tersedia di akun kamu."
+                    )
+
+                else:
+
+                    bot_reply = f"Terjadi error: {e}"
+
+            st.markdown(bot_reply)
+
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": bot_reply,
+            "type": "text"
+        }
+    )
