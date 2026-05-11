@@ -38,8 +38,7 @@ if not api_key:
 # SETUP GEMINI
 # =========================
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel("models/gemini-3.1-flash-lite")
-
+st.write("MODEL AKTIF:", "gemini-1.5-flash")
 # =========================
 # FUNCTIONS
 # =========================
