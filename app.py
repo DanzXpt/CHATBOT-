@@ -5,6 +5,7 @@ import urllib.parse
 import requests
 import io
 from pypdf import PdfReader
+from docx import Document
 from io import BytesIO
 from dotenv import load_dotenv
 import os
@@ -16,13 +17,11 @@ load_dotenv()
 
 api_key = None
 
-# Untuk Streamlit Cloud
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
     pass
 
-# Untuk lokal dari file .env
 if not api_key:
     api_key = os.getenv("GEMINI_API_KEY")
 
@@ -32,7 +31,7 @@ if not api_key:
 st.set_page_config(page_title="AI Chatbot", page_icon="🤖", layout="centered")
 
 if not api_key:
-    st.error("GEMINI_API_KEY tidak ditemukan. Cek file .env kamu.")
+    st.error("GEMINI_API_KEY tidak ditemukan. Cek file .env atau Streamlit Secrets.")
     st.stop()
 
 # =========================
@@ -41,7 +40,6 @@ if not api_key:
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel("models/gemini-2.5-flash")
 
-
 # =========================
 # FUNCTIONS
 # =========================
@@ -49,77 +47,40 @@ def get_system_prompt(mode):
     if mode == "Coding":
         return """
 Kamu adalah senior software engineer expert.
-
-ATURAN WAJIB:
-- Fokus utama coding dan teknologi.
-- Selalu gunakan markdown code block untuk kode.
-- Berikan solusi teknis langsung.
-- Jelaskan error dan cara memperbaikinya.
-- Jika user meminta program, langsung buatkan contoh kode.
-- Jika user bertanya di luar coding, arahkan ke sudut pandang teknologi.
-- Jawaban harus teknis, jelas, dan tidak terlalu panjang.
+Fokus utama coding dan teknologi.
+Selalu gunakan markdown code block untuk kode.
+Berikan solusi teknis langsung.
 """
-
     elif mode == "Matematika":
         return """
 Kamu adalah tutor matematika expert.
-
-ATURAN WAJIB:
-- Jelaskan langkah demi langkah.
-- Gunakan rumus jika perlu.
-- Fokus pada proses perhitungan.
-- Gunakan analogi sederhana.
-- Jangan membahas topik di luar matematika kecuali perlu.
-- Jelaskan seperti guru privat.
+Jelaskan langkah demi langkah.
+Gunakan rumus jika perlu.
+Gunakan analogi sederhana.
 """
-
     elif mode == "Translator":
         return """
 Kamu adalah translator profesional.
-
-ATURAN WAJIB:
-- Fokus menerjemahkan teks.
-- Jangan memberi penjelasan tambahan kecuali diminta.
-- Gunakan bahasa alami dan grammar yang benar.
-- Pertahankan makna asli.
-- Jika bahasa tujuan tidak jelas, terjemahkan ke bahasa Indonesia.
+Fokus menerjemahkan teks secara natural.
+Jangan memberi penjelasan tambahan kecuali diminta.
 """
-
     elif mode == "Ringkas":
         return """
 Kamu adalah AI ultra singkat.
-
-ATURAN WAJIB:
-- Jawab maksimal 3 kalimat.
-- Langsung ke inti.
-- Jangan bertele-tele.
-- Jangan menambahkan penjelasan panjang.
+Jawab maksimal 3 kalimat.
+Langsung ke inti.
 """
-
     elif mode == "Tutor":
         return """
 Kamu adalah tutor ramah untuk pemula.
-
-ATURAN WAJIB:
-- Jelaskan pelan-pelan.
-- Gunakan analogi sederhana.
-- Hindari jargon teknis yang tidak perlu.
-- Ajarkan seperti ke anak SMA.
-- Fokus membuat user benar-benar paham.
+Jelaskan pelan-pelan.
+Gunakan analogi sederhana.
+Hindari jargon teknis yang tidak perlu.
 """
-
     else:
         return """
 Kamu adalah AI assistant general-purpose.
-
-Kamu bisa membantu:
-- coding
-- matematika
-- penjelasan konsep
-- translate
-- brainstorming
-- pertanyaan umum
-
+Kamu bisa membantu coding, matematika, penjelasan konsep, translate, brainstorming, dan pertanyaan umum.
 Jawab dengan bahasa Indonesia yang jelas dan rapi.
 """
 
@@ -143,7 +104,8 @@ def build_conversation(max_history):
     conversation = ""
 
     text_messages = [
-        msg for msg in st.session_state.messages if msg.get("type") == "text"
+        msg for msg in st.session_state.messages
+        if msg.get("type") == "text"
     ]
 
     for msg in text_messages[-max_history:]:
@@ -189,6 +151,9 @@ def make_chat_text():
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "uploaded_image" not in st.session_state:
+    st.session_state.uploaded_image = None
+
 # =========================
 # SIDEBAR
 # =========================
@@ -196,28 +161,34 @@ with st.sidebar:
     st.header("⚙️ Pengaturan")
 
     mode = st.selectbox(
-        "Mode AI", ["General", "Coding", "Matematika", "Translator", "Ringkas", "Tutor"]
+        "Mode AI",
+        ["General", "Coding", "Matematika", "Translator", "Ringkas", "Tutor"]
     )
 
     st.success(f"Mode aktif: {mode}")
 
     temperature = st.slider(
-        "Kreativitas Jawaban", min_value=0.1, max_value=1.0, value=0.7, step=0.1
+        "Kreativitas Jawaban",
+        min_value=0.1,
+        max_value=1.0,
+        value=0.7,
+        step=0.1
     )
 
-    max_history = st.slider("Batas Riwayat Chat", min_value=5, max_value=30, value=10)
+    max_history = st.slider(
+        "Batas Riwayat Chat",
+        min_value=5,
+        max_value=30,
+        value=10
+    )
 
     final_temperature = get_temperature(mode, temperature)
-
     st.caption(f"Temperature aktif: {final_temperature}")
 
     st.divider()
-
     st.write("Command:")
     st.code("/gambar motor merah futuristik")
-
     st.divider()
-
     st.caption("Tips: upload gambar lalu tanya: 'jelaskan gambar ini'.")
 
 generation_config = genai.types.GenerationConfig(temperature=final_temperature)
@@ -227,47 +198,24 @@ generation_config = genai.types.GenerationConfig(temperature=final_temperature)
 # =========================
 st.title("🤖 AI Chatbot")
 st.write("Chatbot AI pakai Python + Gemini + Streamlit. by Ahdan Hype")
-st.caption("Bisa chat, analisis gambar, generate gambar, dan mode khusus.")
+st.caption("Bisa chat, analisis gambar, generate gambar, dan upload banyak file.")
 
 # =========================
 # UPLOAD GAMBAR
 # =========================
-uploaded_file = st.file_uploader(
-    "Upload gambar jika ingin ditanyakan ke AI", type=["jpg", "jpeg", "png"]
+uploaded_image_file = st.file_uploader(
+    "Upload gambar jika ingin ditanyakan ke AI",
+    type=["jpg", "jpeg", "png"],
+    key="image_uploader"
 )
 
-uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"])
-
-pdf_text = ""
-
-if uploaded_pdf is not None:
+if uploaded_image_file is not None:
     try:
-        pdf_reader = PdfReader(uploaded_pdf)
-
-        for page in pdf_reader.pages:
-            text = page.extract_text()
-
-            if text:
-                pdf_text += text + "\n"
-
-        st.success("PDF berhasil dibaca.")
-
-    except Exception as e:
-        st.error(f"Gagal membaca PDF: {e}")
-
-if "uploaded_image" not in st.session_state:
-    st.session_state.uploaded_image = None
-
-if uploaded_file is not None:
-    try:
-        image = Image.open(uploaded_file)
-
+        image = Image.open(uploaded_image_file)
         st.image(image, caption="Gambar yang diupload", use_container_width=True)
 
-        # convert image ke bytes
         img_byte_arr = io.BytesIO()
         image.save(img_byte_arr, format="PNG")
-
         image_bytes = img_byte_arr.getvalue()
 
         st.session_state.uploaded_image = {
@@ -280,6 +228,58 @@ if uploaded_file is not None:
         st.session_state.uploaded_image = None
 
 # =========================
+# MULTI FILE UPLOAD
+# =========================
+uploaded_files = st.file_uploader(
+    "Upload File (PDF, TXT, DOCX)",
+    type=["pdf", "txt", "docx"],
+    accept_multiple_files=True,
+    key="file_uploader"
+)
+
+all_file_text = ""
+
+if uploaded_files:
+    for uploaded_doc in uploaded_files:
+        try:
+            file_name = uploaded_doc.name.lower()
+
+            if file_name.endswith(".pdf"):
+                pdf_reader = PdfReader(uploaded_doc)
+
+                all_file_text += f"\n\n--- Isi dari {uploaded_doc.name} ---\n"
+
+                for page in pdf_reader.pages:
+                    text = page.extract_text()
+                    if text:
+                        all_file_text += text + "\n"
+
+            elif file_name.endswith(".txt"):
+                text = uploaded_doc.read().decode("utf-8")
+
+                all_file_text += f"\n\n--- Isi dari {uploaded_doc.name} ---\n"
+                all_file_text += text + "\n"
+
+            elif file_name.endswith(".docx"):
+                doc = Document(uploaded_doc)
+
+                all_file_text += f"\n\n--- Isi dari {uploaded_doc.name} ---\n"
+
+                for para in doc.paragraphs:
+                    if para.text.strip():
+                        all_file_text += para.text + "\n"
+
+            st.success(f"{uploaded_doc.name} berhasil dibaca.")
+
+        except Exception as e:
+            st.error(f"Gagal membaca {uploaded_doc.name}: {e}")
+
+if all_file_text.strip():
+    file_context = f"\nISI FILE YANG DIUPLOAD:\n{all_file_text}\n"
+else:
+    file_context = ""
+
+# =========================
 # ACTION BUTTONS
 # =========================
 col1, col2 = st.columns(2)
@@ -287,6 +287,7 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("Hapus Chat"):
         st.session_state.messages = []
+        st.session_state.uploaded_image = None
         st.rerun()
 
 with col2:
@@ -367,7 +368,6 @@ if user_input:
 
                     except Exception as e:
                         bot_reply = f"Terjadi error saat membuat gambar: {e}"
-
                         st.markdown(bot_reply)
 
                         st.session_state.messages.append(
@@ -375,102 +375,70 @@ if user_input:
                         )
 
     # =========================
-    # MODE CHAT / ANALISIS GAMBAR
+    # MODE CHAT / ANALISIS GAMBAR / FILE
     # =========================
-else:
-    conversation = build_conversation(max_history)
-    system_prompt = get_system_prompt(mode)
-
-    # =========================
-    # PDF CONTEXT
-    # =========================
-    if pdf_text.strip():
-        pdf_context = f"\nISI PDF:\n{pdf_text}\n"
     else:
-        pdf_context = ""
+        conversation = build_conversation(max_history)
+        system_prompt = get_system_prompt(mode)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Bot sedang berpikir..."):
-            try:
-                if st.session_state.uploaded_image is not None:
-                    prompt = f"""
-{system_prompt}
-
-Kamu juga bisa memahami gambar yang diupload user.
-Jika ada gambar, jelaskan isi gambar secara langsung.
-Jangan bilang kamu tidak bisa melihat gambar jika gambar sudah dikirim.
-
-MODE AKTIF:
-{mode}
-
-Riwayat percakapan:
-{conversation}
-
-ISI PDF:
-{pdf_text}
-
-Pertanyaan user:
-{user_input}
-"""
-
-                    response = model.generate_content(
-                        [prompt, st.session_state.uploaded_image],
-                        generation_config=generation_config,
-                    )
-
-                else:
-                    prompt = f"""
-{system_prompt}
-
-MODE AKTIF:
-{mode}
-
-Riwayat percakapan:
-{conversation}
-
-ISI PDF:
-{pdf_text}
-
-Pertanyaan user:
-{user_input}
-
-"""
-
-                    response = model.generate_content(
-                        prompt,
-                        generation_config=generation_config,
-                    )
-
+        with st.chat_message("assistant"):
+            with st.spinner("Bot sedang berpikir..."):
                 try:
-                    bot_reply = response.text
-                except Exception:
-                    bot_reply = (
-                        "AI gagal membaca gambar. "
-                        "Kemungkinan quota vision Gemini habis atau model tidak mendukung image analysis."
-                    )
+                    prompt = f"""
+{system_prompt}
 
-            except Exception as e:
-                error_text = str(e)
+MODE AKTIF:
+{mode}
 
-                if "429" in error_text or "quota" in error_text.lower():
-                    bot_reply = (
-                        "Quota API habis atau kena limit. "
-                        "Coba tunggu sebentar atau cek billing/quota Gemini."
-                    )
-                elif "API_KEY" in error_text or "api key" in error_text.lower():
-                    bot_reply = (
-                        "API key bermasalah. Cek file `.env` dan pastikan "
-                        "GEMINI_API_KEY benar."
-                    )
-                elif "not found" in error_text.lower():
-                    bot_reply = (
-                        "Model Gemini tidak ditemukan. "
-                        "Pakai model yang tersedia di akun kamu, misalnya `models/gemini-3.1-flash-lite`."
-                    )
-                else:
-                    bot_reply = f"Terjadi error: {e}"
+Riwayat percakapan:
+{conversation}
 
-            st.markdown(bot_reply)
+{file_context}
+
+Pertanyaan user:
+{user_input}
+"""
+
+                    if st.session_state.uploaded_image is not None:
+                        response = model.generate_content(
+                            [prompt, st.session_state.uploaded_image],
+                            generation_config=generation_config,
+                        )
+                    else:
+                        response = model.generate_content(
+                            prompt,
+                            generation_config=generation_config,
+                        )
+
+                    try:
+                        bot_reply = response.text
+                    except Exception:
+                        bot_reply = (
+                            "AI gagal membaca response. "
+                            "Kemungkinan quota Gemini habis atau model tidak mendukung input ini."
+                        )
+
+                except Exception as e:
+                    error_text = str(e)
+
+                    if "429" in error_text or "quota" in error_text.lower():
+                        bot_reply = (
+                            "Quota API habis atau kena limit. "
+                            "Coba tunggu sebentar atau cek billing/quota Gemini."
+                        )
+                    elif "API_KEY" in error_text or "api key" in error_text.lower():
+                        bot_reply = (
+                            "API key bermasalah. Cek file `.env` atau Streamlit Secrets."
+                        )
+                    elif "not found" in error_text.lower():
+                        bot_reply = (
+                            "Model Gemini tidak ditemukan. "
+                            "Pakai model yang tersedia di akun kamu."
+                        )
+                    else:
+                        bot_reply = f"Terjadi error: {e}"
+
+                st.markdown(bot_reply)
 
         st.session_state.messages.append(
             {"role": "assistant", "content": bot_reply, "type": "text"}
