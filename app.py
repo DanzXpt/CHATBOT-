@@ -3,6 +3,7 @@ import google.generativeai as genai
 from PIL import Image
 import urllib.parse
 import requests
+import io
 from io import BytesIO
 from dotenv import load_dotenv
 import os
@@ -37,8 +38,7 @@ if not api_key:
 # SETUP GEMINI
 # =========================
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel("models/gemini-3.1-flash-lite")
-
+model = genai.GenerativeModel("gemini-2.0-flash")
 
 # =========================
 # FUNCTIONS
@@ -231,11 +231,9 @@ st.caption("Bisa chat, analisis gambar, generate gambar, dan mode khusus.")
 # UPLOAD GAMBAR
 # =========================
 uploaded_file = st.file_uploader(
-    "Upload gambar jika ingin ditanyakan ke AI",
-    type=["jpg", "jpeg", "png"]
+    "Upload gambar jika ingin ditanyakan ke AI", type=["jpg", "jpeg", "png"]
 )
 
-# simpan image di session state
 if "uploaded_image" not in st.session_state:
     st.session_state.uploaded_image = None
 
@@ -243,13 +241,18 @@ if uploaded_file is not None:
     try:
         image = Image.open(uploaded_file)
 
-        st.session_state.uploaded_image = image
+        st.image(image, caption="Gambar yang diupload", use_container_width=True)
 
-        st.image(
-            image,
-            caption="Gambar yang diupload",
-            use_container_width=True
-        )
+        # convert image ke bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format="PNG")
+
+        image_bytes = img_byte_arr.getvalue()
+
+        st.session_state.uploaded_image = {
+            "mime_type": "image/png",
+            "data": image_bytes,
+        }
 
     except Exception:
         st.error("File gambar tidak valid.")
@@ -377,7 +380,8 @@ Pertanyaan user:
 """
 
                         response = model.generate_content(
-                            [prompt, st.session_state.uploaded_image], generation_config=generation_config
+                            [prompt, st.session_state.uploaded_image],
+                            generation_config=generation_config,
                         )
 
                     else:
