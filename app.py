@@ -38,7 +38,8 @@ if not api_key:
 # SETUP GEMINI
 # =========================
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel("models/gemini-3.1-flash-lite")
+model = genai.GenerativeModel("models/gemini-2.5-flash")
+
 
 # =========================
 # FUNCTIONS
@@ -356,6 +357,9 @@ if user_input:
     # =========================
     # MODE CHAT / ANALISIS GAMBAR
     # =========================
+    # =========================
+    # MODE CHAT / ANALISIS GAMBAR
+    # =========================
     else:
         conversation = build_conversation(max_history)
         system_prompt = get_system_prompt(mode)
@@ -368,6 +372,8 @@ if user_input:
 {system_prompt}
 
 Kamu juga bisa memahami gambar yang diupload user.
+Jika ada gambar, jelaskan isi gambar secara langsung.
+Jangan bilang kamu tidak bisa melihat gambar jika gambar sudah dikirim.
 
 MODE AKTIF:
 {mode}
@@ -399,10 +405,17 @@ Pertanyaan user:
 """
 
                         response = model.generate_content(
-                            prompt, generation_config=generation_config
+                            prompt,
+                            generation_config=generation_config,
                         )
 
-                    bot_reply = response.text
+                    try:
+                        bot_reply = response.text
+                    except Exception:
+                        bot_reply = (
+                            "AI gagal membaca gambar. "
+                            "Kemungkinan quota vision Gemini habis atau model tidak mendukung image analysis."
+                        )
 
                 except Exception as e:
                     error_text = str(e)
@@ -416,6 +429,11 @@ Pertanyaan user:
                         bot_reply = (
                             "API key bermasalah. Cek file `.env` dan pastikan "
                             "GEMINI_API_KEY benar."
+                        )
+                    elif "not found" in error_text.lower():
+                        bot_reply = (
+                            "Model Gemini tidak ditemukan. "
+                            "Pakai model yang tersedia di akun kamu, misalnya `models/gemini-3.1-flash-lite`."
                         )
                     else:
                         bot_reply = f"Terjadi error: {e}"
