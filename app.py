@@ -236,10 +236,7 @@ uploaded_file = st.file_uploader(
     "Upload gambar jika ingin ditanyakan ke AI", type=["jpg", "jpeg", "png"]
 )
 
-uploaded_pdf = st.file_uploader(
-    "Upload PDF",
-    type=["pdf"]
-)
+uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"])
 
 pdf_text = ""
 
@@ -380,18 +377,23 @@ if user_input:
     # =========================
     # MODE CHAT / ANALISIS GAMBAR
     # =========================
-    # =========================
-    # MODE CHAT / ANALISIS GAMBAR
-    # =========================
-    else:
-        conversation = build_conversation(max_history)
-        system_prompt = get_system_prompt(mode)
+else:
+    conversation = build_conversation(max_history)
+    system_prompt = get_system_prompt(mode)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Bot sedang berpikir..."):
-                try:
-                    if st.session_state.uploaded_image is not None:
-                        prompt = f"""
+    # =========================
+    # PDF CONTEXT
+    # =========================
+    if pdf_text.strip():
+        pdf_context = f"\nISI PDF:\n{pdf_text}\n"
+    else:
+        pdf_context = ""
+
+    with st.chat_message("assistant"):
+        with st.spinner("Bot sedang berpikir..."):
+            try:
+                if st.session_state.uploaded_image is not None:
+                    prompt = f"""
 {system_prompt}
 
 Kamu juga bisa memahami gambar yang diupload user.
@@ -411,13 +413,13 @@ Pertanyaan user:
 {user_input}
 """
 
-                        response = model.generate_content(
-                            [prompt, st.session_state.uploaded_image],
-                            generation_config=generation_config,
-                        )
+                    response = model.generate_content(
+                        [prompt, st.session_state.uploaded_image],
+                        generation_config=generation_config,
+                    )
 
-                    else:
-                        prompt = f"""
+                else:
+                    prompt = f"""
 {system_prompt}
 
 MODE AKTIF:
@@ -426,45 +428,49 @@ MODE AKTIF:
 Riwayat percakapan:
 {conversation}
 
+ISI PDF:
+{pdf_text}
+
 Pertanyaan user:
 {user_input}
+
 """
 
-                        response = model.generate_content(
-                            prompt,
-                            generation_config=generation_config,
-                        )
+                    response = model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                    )
 
-                    try:
-                        bot_reply = response.text
-                    except Exception:
-                        bot_reply = (
-                            "AI gagal membaca gambar. "
-                            "Kemungkinan quota vision Gemini habis atau model tidak mendukung image analysis."
-                        )
+                try:
+                    bot_reply = response.text
+                except Exception:
+                    bot_reply = (
+                        "AI gagal membaca gambar. "
+                        "Kemungkinan quota vision Gemini habis atau model tidak mendukung image analysis."
+                    )
 
-                except Exception as e:
-                    error_text = str(e)
+            except Exception as e:
+                error_text = str(e)
 
-                    if "429" in error_text or "quota" in error_text.lower():
-                        bot_reply = (
-                            "Quota API habis atau kena limit. "
-                            "Coba tunggu sebentar atau cek billing/quota Gemini."
-                        )
-                    elif "API_KEY" in error_text or "api key" in error_text.lower():
-                        bot_reply = (
-                            "API key bermasalah. Cek file `.env` dan pastikan "
-                            "GEMINI_API_KEY benar."
-                        )
-                    elif "not found" in error_text.lower():
-                        bot_reply = (
-                            "Model Gemini tidak ditemukan. "
-                            "Pakai model yang tersedia di akun kamu, misalnya `models/gemini-3.1-flash-lite`."
-                        )
-                    else:
-                        bot_reply = f"Terjadi error: {e}"
+                if "429" in error_text or "quota" in error_text.lower():
+                    bot_reply = (
+                        "Quota API habis atau kena limit. "
+                        "Coba tunggu sebentar atau cek billing/quota Gemini."
+                    )
+                elif "API_KEY" in error_text or "api key" in error_text.lower():
+                    bot_reply = (
+                        "API key bermasalah. Cek file `.env` dan pastikan "
+                        "GEMINI_API_KEY benar."
+                    )
+                elif "not found" in error_text.lower():
+                    bot_reply = (
+                        "Model Gemini tidak ditemukan. "
+                        "Pakai model yang tersedia di akun kamu, misalnya `models/gemini-3.1-flash-lite`."
+                    )
+                else:
+                    bot_reply = f"Terjadi error: {e}"
 
-                st.markdown(bot_reply)
+            st.markdown(bot_reply)
 
         st.session_state.messages.append(
             {"role": "assistant", "content": bot_reply, "type": "text"}
