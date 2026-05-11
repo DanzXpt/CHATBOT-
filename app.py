@@ -6,6 +6,7 @@ import requests
 import io
 from pypdf import PdfReader
 from docx import Document
+from streamlit_mic_recorder import mic_recorder
 from io import BytesIO
 from dotenv import load_dotenv
 import os
@@ -313,24 +314,71 @@ for message in st.session_state.messages:
         else:
             st.markdown(message["content"])
 
+
+# =========================
+# VOICE INPUT
+# =========================
+st.subheader("🎤 Voice AI")
+
+audio = mic_recorder(
+    start_prompt="🎙️ Mulai Rekam",
+    stop_prompt="⏹️ Stop Rekam",
+    just_once=True,
+    key="recorder"
+)
+
+voice_text = ""
+
+if audio:
+    try:
+        with st.spinner("Mengubah suara jadi teks..."):
+
+            audio_bytes = audio["bytes"]
+
+            audio_file = {
+                "mime_type": "audio/wav",
+                "data": audio_bytes
+            }
+
+            response = model.generate_content([
+                """
+Transkrip audio ini ke teks bahasa Indonesia.
+Hanya tuliskan hasil transkrip tanpa penjelasan tambahan.
+""",
+                audio_file
+            ])
+
+            voice_text = response.text
+
+            st.success("Voice berhasil diubah ke teks.")
+            st.write("Hasil suara:", voice_text)
+
+    except Exception as e:
+        st.error(f"Gagal memproses voice: {e}")
+
 # =========================
 # INPUT USER
 # =========================
 user_input = st.chat_input("Tulis pesan...")
 
-if user_input:
+final_input = user_input
+
+if voice_text:
+    final_input = voice_text
+
+if final_input:
     st.session_state.messages.append(
-        {"role": "user", "content": user_input, "type": "text"}
+        {"role": "user", "content": final_input, "type": "text"}
     )
 
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.markdown(final_input)
 
     # =========================
     # MODE GENERATE GAMBAR
     # =========================
-    if user_input.lower().startswith("/gambar"):
-        prompt_gambar = user_input.replace("/gambar", "", 1).strip()
+    if final_input.lower().startswith("/gambar"):
+        prompt_gambar = final_input.replace("/gambar", "", 1).strip()
 
         with st.chat_message("assistant"):
             if not prompt_gambar:
@@ -395,7 +443,7 @@ Riwayat percakapan:
 {file_context}
 
 Pertanyaan user:
-{user_input}
+{final_input}
 """
 
                     if st.session_state.uploaded_image is not None:
