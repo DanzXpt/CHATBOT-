@@ -23,7 +23,7 @@ except Exception:
 # Untuk lokal dari file .env
 if not api_key:
     api_key = os.getenv("GEMINI_API_KEY")
-    
+
 # =========================
 # PAGE CONFIG
 # =========================
@@ -231,18 +231,29 @@ st.caption("Bisa chat, analisis gambar, generate gambar, dan mode khusus.")
 # UPLOAD GAMBAR
 # =========================
 uploaded_file = st.file_uploader(
-    "Upload gambar jika ingin ditanyakan ke AI", type=["jpg", "jpeg", "png"]
+    "Upload gambar jika ingin ditanyakan ke AI",
+    type=["jpg", "jpeg", "png"]
 )
 
-image = None
+# simpan image di session state
+if "uploaded_image" not in st.session_state:
+    st.session_state.uploaded_image = None
 
 if uploaded_file is not None:
     try:
         image = Image.open(uploaded_file)
-        st.image(image, caption="Gambar yang diupload", use_container_width=True)
+
+        st.session_state.uploaded_image = image
+
+        st.image(
+            image,
+            caption="Gambar yang diupload",
+            use_container_width=True
+        )
+
     except Exception:
         st.error("File gambar tidak valid.")
-        image = None
+        st.session_state.uploaded_image = None
 
 # =========================
 # ACTION BUTTONS
@@ -349,7 +360,7 @@ if user_input:
         with st.chat_message("assistant"):
             with st.spinner("Bot sedang berpikir..."):
                 try:
-                    if image is not None:
+                    if st.session_state.uploaded_image is not None:
                         prompt = f"""
 {system_prompt}
 
@@ -366,7 +377,7 @@ Pertanyaan user:
 """
 
                         response = model.generate_content(
-                            [prompt, image], generation_config=generation_config
+                            [prompt, st.session_state.uploaded_image], generation_config=generation_config
                         )
 
                     else:
