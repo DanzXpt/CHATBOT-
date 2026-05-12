@@ -13,6 +13,7 @@ import json
 import edge_tts
 import asyncio
 import re
+from streamlit_paste_button import paste_image_button
 from io import BytesIO
 from dotenv import load_dotenv
 import os
@@ -64,7 +65,11 @@ def search_web(query, max_results=3):
 
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(keywords=query, max_results=max_results))
+            search_query = f'"{query}" spesifikasi harga'
+            results = list(ddgs.text(keywords=search_query, max_results=max_results))
+
+            if not results:
+                return ""
 
             for i, result in enumerate(results, start=1):
                 title = result.get("title", "")
@@ -79,6 +84,7 @@ def search_web(query, max_results=3):
 Link: {link}
 
 """
+
     except Exception as e:
         results_text = f"Search error: {e}"
 
@@ -178,10 +184,7 @@ def load_chat_history(username):
 def save_chat_history(username, messages):
     history_file = f"chat_{username}.json"
 
-    safe_messages = [
-        msg for msg in messages
-        if msg.get("type") == "text"
-    ]
+    safe_messages = [msg for msg in messages if msg.get("type") == "text"]
 
     with open(history_file, "w", encoding="utf-8") as f:
         json.dump(safe_messages, f, ensure_ascii=False, indent=2)
@@ -191,8 +194,7 @@ def build_conversation(max_history):
     conversation = ""
 
     text_messages = [
-        msg for msg in st.session_state.messages
-        if msg.get("type") == "text"
+        msg for msg in st.session_state.messages if msg.get("type") == "text"
     ]
 
     for msg in text_messages[-max_history:]:
@@ -232,6 +234,79 @@ def make_chat_text():
     return chat_text
 
 
+def build_translate_prompt(target_lang, text):
+    language_map = {
+        "id": "Bahasa Indonesia",
+        "en": "English",
+        "jp": "Japanese",
+        "kr": "Korean",
+        "cn": "Chinese",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "ar": "Arabic",
+    }
+
+    target_language = language_map.get(target_lang.lower(), target_lang)
+
+    return f"""
+Terjemahkan teks berikut ke {target_language}.
+
+Jangan beri penjelasan tambahan.
+Hanya tampilkan hasil terjemahan.
+
+Teks:
+{text}
+"""
+
+
+def read_uploaded_file(uploaded_file):
+    file_text = ""
+    file_name = uploaded_file.name.lower()
+
+    if file_name.endswith(".pdf"):
+        pdf_reader = PdfReader(uploaded_file)
+
+        file_text += f"\n\n--- Isi dari {uploaded_file.name} ---\n"
+
+        for page in pdf_reader.pages:
+            text = page.extract_text()
+            if text:
+                file_text += text[:3000] + "\n"
+
+    elif file_name.endswith(".txt"):
+        text = uploaded_file.read().decode("utf-8")
+
+        file_text += f"\n\n--- Isi dari {uploaded_file.name} ---\n"
+        file_text += text[:3000] + "\n"
+
+    elif file_name.endswith(".docx"):
+        doc = Document(uploaded_file)
+
+        file_text += f"\n\n--- Isi dari {uploaded_file.name} ---\n"
+
+        for para in doc.paragraphs:
+            if para.text.strip():
+                file_text += para.text[:3000] + "\n"
+
+    return file_text
+
+
+def process_image_upload(image_file, caption="Gambar diupload"):
+    image = Image.open(image_file)
+
+    st.image(image, caption=caption, use_container_width=True)
+
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format="PNG")
+    image_bytes = img_byte_arr.getvalue()
+
+    st.session_state.uploaded_image = {
+        "mime_type": "image/png",
+        "data": image_bytes,
+    }
+
+
 # =========================
 # SESSION STATE
 # =========================
@@ -246,6 +321,9 @@ if "internet_mode" not in st.session_state:
 
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
+
+if "file_context" not in st.session_state:
+    st.session_state.file_context = ""
 
 # =========================
 # SIDEBAR
@@ -290,7 +368,14 @@ with st.sidebar:
 
     st.divider()
     st.write("Command:")
-    st.code("/gambar motor merah futuristik")
+    st.code(
+        """
+/gambar motor merah futuristik
+/tr en halo apa kabar
+/tr jp saya suka anime
+/edit ubah background jadi cyberpunk
+"""
+    )
     st.divider()
     st.caption("Tips: upload gambar lalu tanya: 'jelaskan gambar ini'.")
 
@@ -301,7 +386,9 @@ generation_config = genai.types.GenerationConfig(temperature=final_temperature)
 # =========================
 st.title("🤖 AI Chatbot")
 st.write("Chatbot AI pakai Python + Gemini + Streamlit. by Ahdan Hype")
-st.caption("Bisa chat, analisis gambar, generate gambar, upload banyak file, voice, dan memory.")
+st.caption(
+    "Bisa chat, analisis gambar, generate gambar, upload banyak file, voice, dan memory."
+)
 
 st.subheader("👤 Login User")
 
@@ -324,85 +411,6 @@ if st.session_state.current_user != username:
     st.session_state.messages = load_chat_history(username)
 
 # =========================
-# UPLOAD GAMBAR
-# =========================
-uploaded_image_file = st.file_uploader(
-    "Upload gambar jika ingin ditanyakan ke AI",
-    type=["jpg", "jpeg", "png"],
-    key="image_uploader",
-)
-
-if uploaded_image_file is not None:
-    try:
-        image = Image.open(uploaded_image_file)
-        st.image(image, caption="Gambar yang diupload", use_container_width=True)
-
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format="PNG")
-        image_bytes = img_byte_arr.getvalue()
-
-        st.session_state.uploaded_image = {
-            "mime_type": "image/png",
-            "data": image_bytes,
-        }
-
-    except Exception:
-        st.error("File gambar tidak valid.")
-        st.session_state.uploaded_image = None
-
-# =========================
-# MULTI FILE UPLOAD
-# =========================
-uploaded_files = st.file_uploader(
-    "Upload File (PDF, TXT, DOCX)",
-    type=["pdf", "txt", "docx"],
-    accept_multiple_files=True,
-    key="file_uploader",
-)
-
-all_file_text = ""
-
-if uploaded_files:
-    for uploaded_doc in uploaded_files:
-        try:
-            file_name = uploaded_doc.name.lower()
-
-            if file_name.endswith(".pdf"):
-                pdf_reader = PdfReader(uploaded_doc)
-
-                all_file_text += f"\n\n--- Isi dari {uploaded_doc.name} ---\n"
-
-                for page in pdf_reader.pages:
-                    text = page.extract_text()
-                    if text:
-                        all_file_text += text[:3000] + "\n"
-
-            elif file_name.endswith(".txt"):
-                text = uploaded_doc.read().decode("utf-8")
-
-                all_file_text += f"\n\n--- Isi dari {uploaded_doc.name} ---\n"
-                all_file_text += text[:3000] + "\n"
-
-            elif file_name.endswith(".docx"):
-                doc = Document(uploaded_doc)
-
-                all_file_text += f"\n\n--- Isi dari {uploaded_doc.name} ---\n"
-
-                for para in doc.paragraphs:
-                    if para.text.strip():
-                        all_file_text += para.text[:3000] + "\n"
-
-            st.success(f"{uploaded_doc.name} berhasil dibaca.")
-
-        except Exception as e:
-            st.error(f"Gagal membaca {uploaded_doc.name}: {e}")
-
-if all_file_text.strip():
-    file_context = f"\nISI FILE YANG DIUPLOAD:\n{all_file_text}\n"
-else:
-    file_context = ""
-
-# =========================
 # ACTION BUTTONS
 # =========================
 col1, col2 = st.columns(2)
@@ -411,6 +419,7 @@ with col1:
     if st.button("Hapus Chat"):
         st.session_state.messages = []
         st.session_state.uploaded_image = None
+        st.session_state.file_context = ""
 
         history_file = f"chat_{username}.json"
 
@@ -483,6 +492,67 @@ Hanya tuliskan hasil transkrip tanpa penjelasan tambahan.
         st.error(f"Gagal memproses voice: {e}")
 
 # =========================
+# CHAT TOOLS DEKAT INPUT
+# =========================
+st.divider()
+st.caption("📎 Upload / paste file atau gambar di sini, jadi tidak perlu scroll ke atas. Akhirnya UX-nya berhenti menyiksa.")
+
+tool_col1, tool_col2 = st.columns([1, 1])
+
+with tool_col1:
+    uploaded_bottom_file = st.file_uploader(
+        "📎 Upload",
+        type=["jpg", "jpeg", "png", "pdf", "txt", "docx"],
+        label_visibility="collapsed",
+        key="bottom_uploader",
+    )
+
+with tool_col2:
+    try:
+        paste_result = paste_image_button(label="📋 Paste Gambar", key="paste_img")
+
+        if paste_result.image_data is not None:
+            image = paste_result.image_data
+
+            st.image(image, caption="Gambar hasil paste", use_container_width=True)
+
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format="PNG")
+            image_bytes = img_byte_arr.getvalue()
+
+            st.session_state.uploaded_image = {
+                "mime_type": "image/png",
+                "data": image_bytes,
+            }
+
+            st.success("Gambar dari clipboard berhasil ditempel.")
+
+    except Exception:
+        st.caption("Paste image tidak tersedia di environment ini.")
+
+if uploaded_bottom_file is not None:
+    try:
+        file_name = uploaded_bottom_file.name.lower()
+
+        if file_name.endswith((".jpg", ".jpeg", ".png")):
+            process_image_upload(uploaded_bottom_file, caption="Gambar diupload dari bawah")
+            st.success("Gambar berhasil diupload.")
+
+        elif file_name.endswith((".pdf", ".txt", ".docx")):
+            new_text = read_uploaded_file(uploaded_bottom_file)
+
+            if new_text.strip():
+                st.session_state.file_context = f"\nISI FILE YANG DIUPLOAD:\n{new_text}\n"
+                st.success(f"{uploaded_bottom_file.name} berhasil dibaca.")
+            else:
+                st.warning("File terbaca, tapi teksnya kosong.")
+
+    except Exception as e:
+        st.error(f"Gagal membaca file: {e}")
+
+file_context = st.session_state.file_context
+
+# =========================
 # INPUT USER
 # =========================
 user_input = st.chat_input("Tulis pesan...", key="main_chat_input")
@@ -507,14 +577,56 @@ if final_input:
         st.markdown(final_input)
 
     # =========================
+    # MODE TRANSLATE
+    # =========================
+    if final_input.lower().startswith("/tr"):
+        parts = final_input.split(" ", 2)
+
+        with st.chat_message("assistant"):
+            if len(parts) < 3:
+                bot_reply = (
+                    "Format salah.\n\n"
+                    "Contoh:\n"
+                    "/tr en halo apa kabar\n"
+                    "/tr jp saya suka anime"
+                )
+
+                st.markdown(bot_reply)
+
+            else:
+                target_lang = parts[1]
+                translate_text = parts[2]
+
+                try:
+                    translate_prompt = build_translate_prompt(
+                        target_lang,
+                        translate_text,
+                    )
+
+                    response = model.generate_content(
+                        translate_prompt,
+                        generation_config=generation_config,
+                    )
+
+                    bot_reply = response.text
+
+                    st.markdown(bot_reply)
+
+                except Exception as e:
+                    bot_reply = f"Gagal translate: {e}"
+                    st.markdown(bot_reply)
+
+    # =========================
     # MODE GENERATE GAMBAR
     # =========================
-    if final_input.lower().startswith("/gambar"):
+    elif final_input.lower().startswith("/gambar"):
         prompt_gambar = final_input.replace("/gambar", "", 1).strip()
 
         with st.chat_message("assistant"):
             if not prompt_gambar:
-                bot_reply = "Tulis prompt gambar. Contoh: `/gambar motor merah futuristik`"
+                bot_reply = (
+                    "Tulis prompt gambar. Contoh: `/gambar motor merah futuristik`"
+                )
                 st.markdown(bot_reply)
 
             else:
@@ -560,6 +672,31 @@ if final_input:
 {system_prompt}
 
 Gunakan HASIL PENCARIAN INTERNET jika tersedia.
+
+Jika HASIL PENCARIAN INTERNET kosong, umum, tidak spesifik, atau tidak relevan:
+- jangan membuat fakta
+- jangan menebak
+- jangan menyimpulkan produk palsu atau tidak ada
+- katakan bahwa hasil pencarian belum cukup spesifik atau belum terverifikasi
+
+Jika hasil pencarian hanya menampilkan halaman umum seperti homepage brand, toko umum, atau kategori produk:
+- jangan menyimpulkan produk tidak ada
+- jangan membuat klaim pasti
+- katakan bahwa hasil pencarian belum menemukan halaman spesifik produk tersebut
+
+Jika informasi internet tidak jelas, tidak lengkap, atau saling bertentangan:
+- jangan membuat klaim pasti
+- jangan mengarang fakta
+- katakan bahwa data belum jelas atau belum terverifikasi
+
+Untuk info produk terbaru seperti HP, laptop, gadget, atau teknologi:
+- prioritaskan informasi terbaru
+- prioritaskan website resmi brand
+- jangan bilang produk tidak ada jika data masih terbatas
+- gunakan bahasa hati-hati seperti "belum terverifikasi", "hasil pencarian belum cukup spesifik", atau "informasi masih terbatas"
+
+Dilarang menyatakan produk fiktif, palsu, atau tidak pernah dirilis hanya karena hasil pencarian tidak menemukannya.
+
 Jangan bilang kamu tidak punya akses internet jika hasil search sudah diberikan.
 
 MODE AKTIF:
